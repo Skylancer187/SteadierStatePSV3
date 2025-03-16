@@ -6,7 +6,8 @@ param (
     [string]$USBDrive,    # USB Drive letter (optional)
     [string]$ExtraFiles = "C:\Tech\SteadierStateV3\ExtraFiles",   # Additional files to be included (optional)
     [string]$DriversPath = "C:\Tech\SteadierStateV3\Drivers",  # Adjust path to driver storage
-    [string]$ExtraApps = "C:\Tech\SteadierStateV3\Applications" # Additional Apps to be included (optional)
+    [string]$ExtraApps = "C:\Tech\SteadierStateV3\Applications", # Additional Apps to be included (optional)
+    [string]$language = "en-us" # Language for modules to use
 )
 
 # Disable automatic errors from stopping the script
@@ -37,6 +38,14 @@ if (Test-Path $FixedCopypeCmdPath) {
     Write-Host "Replaced copype.cmd with fixed version."
 }
 
+# Remove any old DISM Mounts
+$MountPath = "$env:SystemDrive\WinPE\Mount"
+if (Test-Path $MountPath) {
+    Write-Host "A previous mount exists. Forcing unmount without saving changes."
+    Dismount-WindowsImage -Path $MountPath -Discard
+    Remove-Item -Recurse -Force $MountPath
+}
+
 # Create a working directory on the system drive
 $TempDir = "$env:SystemDrive\WinPE"
 if (Test-Path $TempDir) {
@@ -56,39 +65,53 @@ if (!(Test-Path "$PEPath\Media")) {
 }
 
 # Mount WinPE Image for Customization
-Write-Host "Mounting WinPE image for customization..."
-$MountPath = "$TempDir\Mount"
 New-Item -ItemType Directory -Path $MountPath | Out-Null
-Start-Process -NoNewWindow -Wait -FilePath "cmd.exe" -ArgumentList "/c dism /Mount-Image /ImageFile:`"$PEPath\Media\sources\boot.wim`" /Index:1 /MountDir:`"$MountPath`""
+Mount-WindowsImage -ImagePath "$PEPath\Media\sources\boot.wim" -Index 1 -Path $MountPath
 
-# Adding PowerShell Feature
-Write-Host "Adding PowerShell support to WinPE..."
-Start-Process -NoNewWindow -Wait -FilePath "cmd.exe" -ArgumentList "/c dism /Image:`"$MountPath`" /Add-Package /PackagePath:`"$WinPEAddonPath\WinPE_OCs\WinPE-PowerShell.cab`""
+# Adding required WinPE Features
+$Packages = @(
+    "WinPE-WMI.cab", "en-us\WinPE-WMI_en-us.cab",
+    "WinPE-NetFX.cab", "en-us\WinPE-NetFX_en-us.cab",
+    "WinPE-Scripting.cab", "en-us\WinPE-Scripting_en-us.cab",
+    "WinPE-PowerShell.cab", "en-us\WinPE-PowerShell_en-us.cab",
+    "WinPE-StorageWMI.cab", "en-us\WinPE-StorageWMI_en-us.cab",
+    "WinPE-DismCmdlets.cab", "en-us\WinPE-DismCmdlets_en-us.cab"
+)
 
-# Download and apply the latest Windows update
-Write-Host "Downloading the latest Windows 10 update..."
-$UpdateURL = (Invoke-WebRequest -Uri "https://www.catalog.update.microsoft.com/Search.aspx?q=Windows10.0-KB" | Select-String -Pattern "https://download.windowsupdate.com/.*?\.msu" | Select-Object -First 1).Matches.Value
-$UpdateFile = "$TempDir\Windows10-Update.msu"
-Invoke-WebRequest -Uri $UpdateURL -OutFile $UpdateFile
+foreach ($Package in $Packages) {
+    $PackagePath = "$WinPEAddonPath\amd64\WinPE_OCs\$Package"
+    if (Test-Path $PackagePath) {
+        Write-Host "Adding package: $Package"
+        Add-WindowsPackage -Path $MountPath -PackagePath $PackagePath
+    } else {
+        Write-Error "Package not found: $Package"
+        exit 1
+    }
+}
 
-Write-Host "Applying update $UpdateFile..."
-Start-Process -NoNewWindow -Wait -FilePath "cmd.exe" -ArgumentList "/c dism /Image:`"$MountPath`" /Add-Package /PackagePath:`"$UpdateFile`""
+# Download and apply the latest Windows update (Future Work)
+#Write-Host "Downloading the latest Windows 10 update..."
+#$UpdateURL = (Invoke-WebRequest -Uri "https://www.catalog.update.microsoft.com/Search.aspx?q=Windows10.0-KB" | Select-String -Pattern "https://download.windowsupdate.com/.*?\.msu" | Select-Object -First 1).Matches.Value
+#$UpdateFile = "$TempDir\Windows10-Update.msu"
+#Invoke-WebRequest -Uri $UpdateURL -OutFile $UpdateFile
 
-# Adding Apps Files (if specified)
-Copy-Item "$ExtraApps\*" -Destination "$MountPath\Apps" -Recurse -Force
+#Write-Host "Applying update $UpdateFile..."
+#Add-WindowsPackage -Path $MountPath -PackagePath $UpdateFile
 
 # Copy necessary files into specific directories
 $SRSDest = "$MountPath\SRS"
 $HooksDest = "$MountPath\hooks"
 $HooksSamplesDest = "$MountPath\hooks-samples"
-$RootDest = "$MountPath\"
-New-Item -ItemType Directory -Path $SRSDest, $HooksDest, $HooksSamplesDest -Force | Out-Null
+$RootDest = "$MountPath"
+$AppsDest = "$MountPath\Apps"
+New-Item -ItemType Directory -Path $SRSDest, $HooksDest, $HooksSamplesDest, $AppsDest -Force | Out-Null
 
 Write-Host "Copying specific files to designated directories..."
 Copy-Item "$ExtraFiles\SRS\*" -Destination $SRSDest -Recurse -Force
 Copy-Item "$ExtraFiles\hooks\*" -Destination $HooksDest -Recurse -Force
 Copy-Item "$ExtraFiles\hooks-samples\*" -Destination $HooksSamplesDest -Recurse -Force
 Copy-Item "$ExtraFiles\Root\*" -Destination $RootDest -Recurse -Force
+Copy-Item "$ExtraApps\*" -Destination $AppsDest -Recurse -Force
 
 # Update wallpaper with winpe.jpg
 $WallpaperSource = "$ExtraFiles\Wallpaper\winpe.jpg"
@@ -101,7 +124,7 @@ if (Test-Path $WallpaperSource) {
 
 # Unmount and Save Changes
 Write-Host "Finalizing and unmounting WinPE image..."
-Start-Process -NoNewWindow -Wait -FilePath "cmd.exe" -ArgumentList "/c dism /Unmount-Image /MountDir:`"$MountPath`" /Commit"
+Dismount-WindowsImage -Path $MountPath -Save
 
 # Prompt user to create USB, ISO, or both
 Write-Host "Process completed successfully."
