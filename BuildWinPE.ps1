@@ -17,18 +17,35 @@ $ErrorActionPreference = "Stop"
 $ADKPath = "C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit"
 $WinPEAddonPath = "$ADKPath\Windows Preinstallation Environment"
 $DeploymentToolsPath = "$ADKPath\Deployment Tools"
+$OscdimgPath = "$DeploymentToolsPath\amd64\Oscdimg"
 $CopypeCmdPath = "$WinPEAddonPath\copype.cmd"
 $MakeWinPEMediaCmdPath = "$WinPEAddonPath\makewinpemedia.cmd"
+
+# Ensure required directories are in the system PATH
+$RequiredPaths = @($DeploymentToolsPath, $WinPEAddonPath, $OscdimgPath)
+$CurrentPath = [System.Environment]::GetEnvironmentVariable("Path", [System.EnvironmentVariableTarget]::Machine)
+$MissingPaths = $RequiredPaths | Where-Object { $CurrentPath -notlike "*$_*" }
+
+if ($MissingPaths) {
+    $NewPath = ($CurrentPath + ";" + ($MissingPaths -join ";")).TrimEnd(';')
+    [System.Environment]::SetEnvironmentVariable("Path", $NewPath, [System.EnvironmentVariableTarget]::Machine)
+    Write-Host "Updated system PATH to include required directories. Please restart your session for changes to take effect."
+    exit 1
+}
 
 # Check OS build version
 $OSBuild = [System.Environment]::OSVersion.Version.Build
 if ($OSBuild -le 10240) {
-    if (!(Test-Path $ADKPath) -or !(Test-Path $WinPEAddonPath) -or !(Test-Path $CopypeCmdPath) -or !(Test-Path $MakeWinPEMediaCmdPath)) {
+        Write-Host "Your host OS build $OSBuild is too old to run this WinPE Builder Tool.`nPlease upgrade or use another computer with Windows 10 or 11 23H2 or newer."
+        exit 1
+}
+
+# Check ADK Paths
+if (!(Test-Path $ADKPath) -or !(Test-Path $WinPEAddonPath) -or !(Test-Path $CopypeCmdPath) -or !(Test-Path $MakeWinPEMediaCmdPath)) {
         Write-Host "Windows ADK or WinPE Add-on not found. Please install them before proceeding."
         Write-Host "Download Windows ADK: https://go.microsoft.com/fwlink/?linkid=2289980"
         Write-Host "Download WinPE Add-on: https://go.microsoft.com/fwlink/?linkid=2289981"
         exit 1
-    }
 }
 
 # Replace copype.cmd with fixed version before execution
@@ -42,7 +59,10 @@ if (Test-Path $FixedCopypeCmdPath) {
 $MountPath = "$env:SystemDrive\WinPE\Mount"
 if (Test-Path $MountPath) {
     Write-Host "A previous mount exists. Forcing unmount without saving changes."
-    Dismount-WindowsImage -Path $MountPath -Discard
+    if ((Get-ChildItem -Path $MountPath -Recurse -ErrorAction Ignore).count -ge "1")
+    {
+    Dismount-WindowsImage -Path $MountPath -Discard -ErrorAction SilentlyContinue
+    }
     Remove-Item -Recurse -Force $MountPath
 }
 
@@ -122,9 +142,61 @@ if (Test-Path $WallpaperSource) {
     Copy-Item $WallpaperSource -Destination $WallpaperDestination -Force
 }
 
+# Add drivers from specified directory
+if (Test-Path $DriversPath) {
+    Write-Host "Adding drivers from: $DriversPath"
+    $DriverFiles = Get-ChildItem -Path $DriversPath -Recurse -Filter "*.inf"
+    foreach ($Driver in $DriverFiles) {
+        Write-Host "Adding driver: $($Driver.FullName)"
+        Add-WindowsDriver -Path $MountPath -Driver $Driver.FullName
+    }
+} else {
+    Write-Host "Drivers directory not found, skipping driver addition."
+}
+
 # Unmount and Save Changes
 Write-Host "Finalizing and unmounting WinPE image..."
 Dismount-WindowsImage -Path $MountPath -Save
 
 # Prompt user to create USB, ISO, or both
+$Choice = Read-Host "Do you want to create (1) USB, (2) ISO, or (3) both?"
+switch ($Choice) {
+    "1" {
+        if (-not $USBDrive) {
+            $USBDrive = Read-Host "Enter USB drive letter (e.g., E:)"
+        }
+        Write-Host "Creating bootable USB..."
+        #& "$MakeWinPEMediaCmdPath" /UFD "$PEPath" $USBDrive
+        $arg = "/UFD $PEPath $USBDrive"
+        Start-Process -FilePath "makewinpemedia" -ArgumentList "$arg" -Wait
+    }
+    "2" {
+        Write-Host "Creating bootable ISO..."
+        #& "$MakeWinPEMediaCmdPath" /ISO "$PEPath" "$ISOPath\WinPE.iso"
+        $arg = "/ISO /f $PEPath $ISOPath\WinPE.iso"
+        Start-Process -FilePath "makewinpemedia" -ArgumentList "$arg" -Wait
+    }
+    "3" {
+        if (-not $USBDrive) {
+            $USBDrive = Read-Host "Enter USB drive letter (e.g., E:)"
+        }
+        Write-Host "Creating both USB and ISO..."
+        #& "$MakeWinPEMediaCmdPath" /UFD "$PEPath" $USBDrive
+        #& "$MakeWinPEMediaCmdPath" /ISO "$PEPath" "$ISOPath\WinPE.iso"
+        # ISO
+        $argISO = "/ISO /f $PEPath $ISOPath\WinPE.iso"
+        Start-Process -FilePath "makewinpemedia" -ArgumentList "$argISO" -Wait
+        # USB
+        $argUSB = "/UFD $PEPath $USBDrive"
+        Start-Process -FilePath "makewinpemedia" -ArgumentList "$argUSB" -Wait
+
+    }
+    default {
+        Write-Host "Invalid selection. Exiting."
+        exit 1
+    }
+}
+
 Write-Host "Process completed successfully."
+
+Start-Sleep -Seconds 30
