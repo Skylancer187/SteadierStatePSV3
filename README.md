@@ -2,7 +2,7 @@
 This is the migration from CMD files to support PowerShell versions of Mark Minasi and 7thMC's work.
 
 Tasks:
-1. BuildPE - Completed
+1. BuildPE - Completed - Build Testing
 2. CVT2VHD - Not Started
 3. PREPNEWPC - Not Started
 4. StartnetHD - Not Started
