@@ -28,5 +28,4 @@ If you're interested in this project, please feel free to reach out and coordina
 
 Again, thanks to anyone who downloads, shares, and commits to the project.
 
--Skylancer
-Matthew - Programs Manager Garnet Gaming Lounge and Esports
+-Skylancer/Matthew - Programs Manager Garnet Gaming Lounge and Esports
